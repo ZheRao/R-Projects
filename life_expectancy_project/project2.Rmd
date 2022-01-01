@@ -1,0 +1,617 @@
+---
+title: "Project"
+author: "Zhe Rao"
+date: "20/11/2021"
+output: pdf_document
+---
+
+# Prepare Data
+
+```{r}
+
+# read in data
+
+dataLife = read.csv("Life Expectancy Data.csv")
+
+# identify the missing values
+summary(dataLife)
+
+```
+
+```{r}
+
+# drop the Hepatitis, GDP, and population predictor, and replace the remaining missing values with the median/mode of the other records
+dataLife$Life.expectancy[is.na(dataLife$Life.expectancy)] <- median(dataLife$Life.expectancy, na.rm=TRUE)
+dataLife$Adult.Mortality[is.na(dataLife$Adult.Mortality)] <- median(dataLife$Adult.Mortality, na.rm=TRUE)
+dataLife$Alcohol[is.na(dataLife$Alcohol)] <- median(dataLife$Alcohol, na.rm=TRUE)
+dataLife$BMI[is.na(dataLife$BMI)] <- median(dataLife$BMI, na.rm=TRUE)
+dataLife$Polio[is.na(dataLife$Polio)] <- median(dataLife$Polio, na.rm=TRUE)
+dataLife$Total.expenditure[is.na(dataLife$Total.expenditure)] <- median(dataLife$Total.expenditure, na.rm=TRUE)
+dataLife$Diphtheria[is.na(dataLife$Diphtheria)] <- median(dataLife$Diphtheria, na.rm=TRUE)
+dataLife$thinness..1.19.years[is.na(dataLife$thinness..1.19.years)] <- median(dataLife$thinness..1.19.years, na.rm=TRUE)
+dataLife$thinness.5.9.years[is.na(dataLife$thinness.5.9.years)] <- median(dataLife$thinness.5.9.years, na.rm=TRUE)
+dataLife$Income.composition.of.resources[is.na(dataLife$Income.composition.of.resources)] <- median(dataLife$Income.composition.of.resources, na.rm=TRUE)
+dataLife$Schooling[is.na(dataLife$Schooling)] <- median(dataLife$Schooling, na.rm=TRUE)
+drop = c("Hepatitis.B","GDP","Population")
+dataLife = dataLife[,!(names(dataLife) %in% drop)]
+summary(dataLife)
+```
+
+
+
+
+# Find most predictive model
+
+## use stepwise selection
+
+```{r}
+
+# we can split the data into train and test to evaluate performance
+
+#  now get the index of training set
+set.seed(251203021)
+n = nrow(dataLife)
+idx_tr = sample(n,round(0.70*n),replace=FALSE)
+
+# now separate training and testing set from the whole dataset
+dataLife_tr = dataLife[idx_tr,]
+dataLife_ts = dataLife[-idx_tr,]
+
+# add records present in test set but not in training set to training set so that the model know what to do with those records when making prediction in the test set (possible leaking of information)
+dataLife_tr = rbind(dataLife_tr, dataLife_ts[which(dataLife_ts$Country=='Cook Islands' | dataLife_ts$Country=='San Marino'),])
+
+
+
+# now fit the stepwise selection with AIC on training set
+
+
+
+# null model
+fit_null2 = lm(Life.expectancy~1,data=dataLife_tr)
+
+# stepwise AIC with forward selection
+fit_step_AIC = step(fit_null2,direction="both",
+                    scope=Life.expectancy~Year+Adult.Mortality+infant.deaths+Alcohol
+                    +percentage.expenditure+Measles+BMI+under.five.deaths
+                    +Polio+Total.expenditure+Diphtheria+HIV.AIDS
+                    +thinness..1.19.years+thinness.5.9.years+Income.composition.of.resources
+                    +Schooling+Country+Status, trace=FALSE)
+#summary(fit_step_AIC)
+AIC(fit_step_AIC)
+
+
+# stepwise BIC with forward selection
+fit_step_BIC = step(fit_null2,direction="both",
+                    scope=Life.expectancy~Year+Adult.Mortality+infant.deaths+Alcohol
+                    +percentage.expenditure+Measles+BMI+under.five.deaths
+                    +Polio+Total.expenditure+Diphtheria+HIV.AIDS
+                    +thinness..1.19.years+thinness.5.9.years+Income.composition.of.resources
+                    +Schooling+Country+Status, trace=FALSE,k=log(nrow(dataLife_tr)))
+#summary(fit_step_BIC)
+BIC(fit_step_BIC)
+
+
+```
+
+```{r}
+
+# assess the performance of stepwise with AIC and BIC
+ypr_step_AIC = predict(fit_step_AIC,newdata=dataLife_ts[,-4])
+mse_step_AIC = mean((ypr_step_AIC - dataLife_ts[,4])^2)
+mse_step_AIC
+
+ypr_step_BIC = predict(fit_step_BIC,newdata=dataLife_ts[,-4])
+mse_step_BIC = mean((ypr_step_BIC - dataLife_ts[,4])^2)
+mse_step_BIC
+
+
+
+```
+comment: they both are pretty good
+
+## use shrinkage methods
+
+```{r}
+
+# fist seperate the x and y
+X = model.matrix(Life.expectancy~.,dataLife)[,-1] # exclude the intercept column
+y = dataLife$Life.expectancy
+
+
+# define the training and testing set
+X_tr = X[idx_tr,]
+y_tr = y[idx_tr]
+
+X_ts = X[-idx_tr,]
+y_ts = y[-idx_tr]
+
+
+
+```
+
+
+```{r}
+
+
+
+# now try to use shrinkage methods
+
+# Ridge Regression
+library(glmnet)
+
+# try to find the best lambda (strength of penalty)
+fit_ridge_cv = cv.glmnet(X_tr,y_tr,alpha=0,nfolds=20)
+bestlam = fit_ridge_cv$lambda.min
+bestlam
+
+# plot the best lambda with ridge regression
+fit_ridge = glmnet(X_tr, y_tr, alpha=0)
+plot(fit_ridge, xvar="lambda",label=TRUE,lwd=2)
+abline(v=log(bestlam))
+
+# now fit the data with the best lambda
+fit_ridge_best = glmnet(X_tr, y_tr, alpha=0, lambda=bestlam)
+
+# assess performance
+ypr_ridge = predict(fit_ridge_best,newx=X_ts)
+mse_ridge = mean((ypr_ridge - y_ts)^2)
+mse_ridge
+
+
+```
+comment: ridge is not better than models from stepwise selection algorithm
+
+
+```{r}
+
+# LASSO regression
+
+# again, find the best parameter
+fit_lasso_cv = cv.glmnet(X_tr,y_tr,alpha=1,nfolds=20)
+bestlam = fit_lasso_cv$lambda.min
+bestlam
+
+# see the plot
+fit_lasso = glmnet(X_tr, y_tr, alpha=1)
+plot(fit_lasso,xvar="lambda",label=TRUE,lwd=2)
+abline(v=log(bestlam))
+
+fit_lasso_best = glmnet(X_tr, y_tr, alpha=1, lambda=bestlam)
+
+# assess performance
+ypr_lasso = predict(fit_lasso_best,newx=X_ts)
+mse_lasso = mean((ypr_lasso - y_ts)^2)
+mse_lasso
+
+
+
+```
+comment: lasso is not better than models from step-wise selection
+
+## elastic net
+```{r}
+# grid search for best alpha to use in the elastic net
+
+set.seed(251203021)
+alphas = seq(0,1,0.1)
+
+lowest_error=1000000
+
+
+for (i in alphas) {
+  fit_cv = cv.glmnet(X_tr,y_tr,alpha=i,nfolds=10)
+  bestlam = fit_cv$lambda.min
+  
+  fit_elastic = glmnet(X_tr, y_tr, alpha=i, lambda=bestlam)
+  ypr_elastic = predict(fit_elastic,newx=X_ts)
+  mse_elastic = mean((ypr_elastic - y_ts)^2)
+  
+  if (mse_elastic < lowest_error) {
+    lowest_error = mse_elastic
+    best_mse = mse_elastic
+    best_alpha = i
+    best_lambda = bestlam
+    
+  }
+  
+}
+
+
+```
+comment: find that around alpha = 0.2 produced lowest mse, will look into more detail
+
+# investgate further
+```{r}
+
+# grid search for best alpha to use in the elastic net
+
+alphas = seq(0.1,0.3,0.02)
+
+lowest_error=1000000
+
+
+for (i in alphas) {
+  fit_cv = cv.glmnet(X_tr,y_tr,alpha=i,nfolds=10)
+  bestlam = fit_cv$lambda.min
+  
+  fit_elastic = glmnet(X_tr, y_tr, alpha=i, lambda=bestlam)
+  ypr_elastic = predict(fit_elastic,newx=X_ts)
+  mse_elastic = mean((ypr_elastic - y_ts)^2)
+  
+  if (mse_elastic < lowest_error) {
+    lowest_error = mse_elastic
+    best_mse = mse_elastic
+    best_alpha = i
+    best_lambda = bestlam
+    
+  }
+  
+}
+
+# best parameters
+best_alpha
+best_lambda
+# fit the final elastic net model with optimum parameters and assess the performance
+fit_elastic_final = glmnet(X_tr, y_tr, alpha=best_alpha,lambda=best_lambda)
+ypr_elastic = predict(fit_elastic_final, newx=X_ts)
+mse_elastic = mean((ypr_elastic - y_ts)^2)
+mse_elastic
+
+```
+
+
+
+
+
+
+
+
+
+
+## choose a model
+
+```{r}
+
+# choose model from stepwise selection with BIC
+# now fit the whole model
+
+# null model
+my_null = lm(Life.expectancy~1,data=dataLife)
+
+# stepwise AIC with forward selection
+my_fit = step(my_null,direction="both",
+                    scope=Life.expectancy~Year+Adult.Mortality+infant.deaths+Alcohol
+                    +percentage.expenditure+Measles+BMI+under.five.deaths
+                    +Polio+Total.expenditure+Diphtheria+HIV.AIDS
+                    +thinness..1.19.years+thinness.5.9.years+Income.composition.of.resources
+                    +Schooling+Country+Status, trace=FALSE)
+options(max.print=4000)
+summary(my_fit)
+
+
+
+
+```
+
+
+
+# model diagnostic
+
+## unusual observations
+```{r}
+# check for unusual observations
+
+# check cooks distance
+influencial_idx = which(cooks.distance(my_fit) > 4 / length(cooks.distance(my_fit)))
+
+# remove the tags on influencial_idx
+influencial_idx = unname(influencial_idx)
+
+#influencial_idx
+length(influencial_idx)
+
+
+
+```
+
+
+
+## residual plot
+
+```{r}
+
+
+# residual plot
+plot(fitted(my_fit),resid(my_fit),col="grey",pch=20,
+     xlab = "Fitted", ylab = "Residuals", main="Residual Plot",ylim=c(-10,10))
+abline(h=0, col="red", lwd=3)
+
+
+```
+comment: the residual plot shows evidence against equal variance assumption
+but the linearity assumtion is okay
+
+## histogram
+
+```{r}
+# histogram of residual
+hist(resid(my_fit), xlab="Residuals", main="Histogram",
+     col = "darkorange",border = "dodgerblue", breaks=70)
+
+# the distribution is skewed to the left
+
+```
+
+
+## QQ plot
+
+```{r}
+# normal QQ plot
+qqnorm(resid(my_fit),main="QQ Plot",col="grey",pch=20,
+     xlab = "Theoretical Quantiles", ylab = "Actual Quantiles")
+qqline(resid(my_fit),col="red")
+
+
+
+```
+
+comment: the normality assumption is violated
+
+## test statistics
+
+```{r}
+# BP test
+library(lmtest)
+bptest(my_fit)
+
+# SW test
+shapiro.test(resid(my_fit))
+
+
+```
+comment: we reject both null hypothesis that (equal variance and normality assumption is not violated)
+
+
+As there are many influential points, it should not be removed
+```{r}
+
+# Box-cox transformation
+library(MASS)
+par(mfrow=c(1,2))
+boxcox(object = my_fit)
+boxcox(object = my_fit, lambda = seq(1, 2, by = 0.05))
+
+```
+
+
+```{r}
+# assess the result of box-cox transformation
+lambda = 1.5
+lm_fit_transf <- lm(((Life.expectancy^(lambda)-1)/(lambda))~Country + Year + HIV.AIDS + Schooling + 
+    Diphtheria + Adult.Mortality + under.five.deaths + infant.deaths + 
+    Measles + Alcohol + Polio + thinness.5.9.years + Total.expenditure + 
+    percentage.expenditure, data = dataLife)
+
+
+par(mfrow=c(1,2))
+plot(resid(lm_fit_transf)~fitted(lm_fit_transf), col = "grey", pch = 20,
+     xlab = "Fitted", ylab = "Residuals", main = "Fitted versus Residuals")
+abline(h = 0, col = "darkorange", lwd = 2)
+
+
+qqnorm(resid(lm_fit_transf), main = "Normal Q-Q Plot", col = "darkgrey")
+qqline(resid(lm_fit_transf), col = "dodgerblue", lwd = 2)
+```
+
+## polynomial terms
+
+```{r}
+# quadratic model
+lm_quadratic <- lm(Life.expectancy ~ Country + Year + HIV.AIDS + Schooling + 
+    Diphtheria + Adult.Mortality + under.five.deaths + infant.deaths + 
+    Measles + Alcohol + Polio + thinness.5.9.years + Total.expenditure + 
+    percentage.expenditure + I(HIV.AIDS^2) + I(Schooling^2) + I(Diphtheria^2)
+    + I(Adult.Mortality^2) + I(under.five.deaths^2) + I(infant.deaths^2) + I(Measles^2) + I(Alcohol^2) + I(Polio^2) + I(thinness.5.9.years^2) + I(Total.expenditure^2) + I(percentage.expenditure^2), data = dataLife)
+summary(lm_quadratic)
+
+# Residual plot 
+par(mfrow=c(1,2))
+plot(resid(lm_quadratic)~fitted(lm_quadratic), col = "grey", pch = 20,
+     xlab = "Fitted", ylab = "Residuals", main = "Fitted versus Residuals")
+abline(h = 0, col = "darkorange", lwd = 2)
+
+# Normal qq plot
+qqnorm(resid(lm_quadratic), main = "Normal Q-Q Plot", col = "darkgrey")
+qqline(resid(lm_quadratic), col = "dodgerblue", lwd = 2)
+```
+
+
+
+```{r}
+
+# cubic model
+lm_cubic <- lm(Life.expectancy ~ Country + Year + HIV.AIDS + Schooling + 
+    Diphtheria + Adult.Mortality + under.five.deaths + infant.deaths + 
+    Measles + Alcohol + Polio + thinness.5.9.years + Total.expenditure + 
+    percentage.expenditure + I(HIV.AIDS^2) + I(Schooling^2) + I(Diphtheria^2)
+    + I(Adult.Mortality^2) + I(under.five.deaths^2) + I(infant.deaths^2) + I(Measles^2) + I(Alcohol^2) + I(Polio^2) + I(thinness.5.9.years^2) + I(Total.expenditure^2) + I(percentage.expenditure^2)
+    + I(HIV.AIDS^3) + I(Schooling^3) + I(Diphtheria^3)
+    + I(Adult.Mortality^3) + I(under.five.deaths^3) + I(infant.deaths^3) + I(Measles^3) + I(Alcohol^3) + I(Polio^3) + I(thinness.5.9.years^3) + I(Total.expenditure^3) + I(percentage.expenditure^3), data = dataLife)
+summary(lm_cubic)
+
+# Residual plot
+par(mfrow=c(1,2))
+plot(resid(lm_cubic)~fitted(lm_cubic), col = "grey", pch = 20,
+     xlab = "Fitted", ylab = "Residuals", main = "Fitted versus Residuals")
+abline(h = 0, col = "darkorange", lwd = 2)
+
+# Normal qq plot
+qqnorm(resid(lm_cubic), main = "Normal Q-Q Plot", col = "darkgrey")
+qqline(resid(lm_cubic), col = "dodgerblue", lwd = 2)
+
+
+
+
+
+
+
+```
+
+
+
+
+# multicollinearity
+
+```{r}
+# finding predictors with VIF larger than 20
+
+library(faraway)
+
+vifs=vif(my_fit)
+corr = which(vifs>20)
+vifs[corr]
+
+
+```
+
+```{r}
+
+# drop variables with high VIF
+drop = c("under.five.deaths","infant.deaths")
+dataLife = dataLife[,!(names(dataLife) %in% drop)]
+
+
+```
+
+
+```{r}
+
+
+# fit the model without the predictors with high VIF
+
+final_null = lm(Life.expectancy~1,data=dataLife)
+final_fit = step(final_null,direction="both",
+                    scope=Life.expectancy~Year+Adult.Mortality+Alcohol
+                    +percentage.expenditure+Measles+BMI
+                    +Polio+Total.expenditure+Diphtheria+HIV.AIDS
+                    +thinness..1.19.years+thinness.5.9.years+Income.composition.of.resources
+                    +Schooling+Country+Status, trace=FALSE)
+options(max.print=4000)
+summary(final_fit)
+
+
+
+
+
+
+```
+
+```{r}
+
+# assess performance
+
+set.seed(251203021)
+n = nrow(dataLife)
+idx_tr = sample(n,round(0.70*n),replace=FALSE)
+
+dataLife_tr = dataLife[idx_tr,]
+dataLife_ts = dataLife[-idx_tr,]
+
+dataLife_tr = rbind(dataLife_tr, dataLife_ts[which(dataLife_ts$Country=='Cook Islands' | dataLife_ts$Country=='San Marino' |dataLife_ts$Country=='Marshall Islands' |dataLife_ts$Country=='Tuvalu') ,])
+
+
+ypr = predict(final_fit,newdata=dataLife_ts)
+mse = mean((ypr - dataLife_ts[,4])^2)
+mse
+
+```
+
+
+```{r}
+
+# check model assumption
+
+# Residual plot
+par(mfrow=c(1,2))
+plot(resid(final_fit)~fitted(final_fit), col = "grey", pch = 20,
+     xlab = "Fitted", ylab = "Residuals", main = "Fitted versus Residuals")
+abline(h = 0, col = "darkorange", lwd = 2)
+
+# Normal qq plot
+qqnorm(resid(final_fit), main = "Normal Q-Q Plot", col = "darkgrey")
+qqline(resid(final_fit), col = "dodgerblue", lwd = 2)
+
+
+
+
+
+```
+
+
+
+# interactions
+
+```{r}
+
+# considering interactions between countries and other predictors
+my_fit_interaction = lm(Life.expectancy ~ Country*Year + HIV.AIDS*Country + Schooling*Country + Diphtheria*Country + Adult.Mortality*Country + Measles*Country + Alcohol*Country+Polio*Country+thinness.5.9.years*Country + Total.expenditure*Country + percentage.expenditure*Country, data=dataLife)
+
+
+summary(my_fit_interaction)
+```
+
+
+```{r}
+
+# F test
+anova(final_fit, my_fit_interaction)
+
+
+```
+
+
+```{r}
+
+# assess performance
+set.seed(251203021)
+n = nrow(dataLife)
+idx_tr = sample(n,round(0.70*n),replace=FALSE)
+
+dataLife_tr = dataLife[idx_tr,]
+dataLife_ts = dataLife[-idx_tr,]
+
+dataLife_tr = rbind(dataLife_tr, dataLife_ts[which(dataLife_ts$Country=='Cook Islands' | dataLife_ts$Country=='San Marino' |dataLife_ts$Country=='Marshall Islands' |dataLife_ts$Country=='Tuvalu') ,])
+
+my_fit_train = lm(Life.expectancy ~ Country*Year + HIV.AIDS*Country + Schooling*Country + Diphtheria*Country + Adult.Mortality*Country + Measles*Country + Alcohol*Country+Polio*Country+thinness.5.9.years*Country + Total.expenditure*Country + percentage.expenditure*Country, data=dataLife_tr)
+
+ypr = predict(my_fit_train,newdata=dataLife_ts)
+mse = mean((ypr- dataLife_ts[,4])^2)
+mse
+
+
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
